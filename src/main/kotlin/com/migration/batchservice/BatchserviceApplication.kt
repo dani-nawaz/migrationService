@@ -10,5 +10,4 @@ class BatchserviceApplication
 
 fun main(args: Array<String>) {
 	runApplication<BatchserviceApplication>(*args)
-
 }
