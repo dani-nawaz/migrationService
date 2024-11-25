@@ -37,9 +37,7 @@ class ArchiveRequestService(
                     val jobParameters = JobParametersBuilder()
                         .addString("type", entry["type"] as String)
                         .addString("cutOffDate", cutOffDate.toString())
-                        .addLong("time", System.currentTimeMillis())
                         .toJobParameters()
-
                     jobLauncher.run(job, jobParameters)
                 } catch (e: Exception) {
                     // Revert status back to pending if job launch fails

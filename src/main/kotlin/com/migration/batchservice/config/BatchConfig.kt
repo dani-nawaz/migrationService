@@ -1,8 +1,7 @@
 package com.migration.batchservice.config
 
 import org.slf4j.LoggerFactory
-import org.springframework.batch.core.Job
-import org.springframework.batch.core.Step
+import org.springframework.batch.core.*
 import org.springframework.batch.core.configuration.annotation.EnableBatchProcessing
 
 import org.springframework.batch.core.job.builder.JobBuilder
@@ -23,10 +22,11 @@ import org.springframework.boot.jdbc.DataSourceBuilder
 import org.springframework.context.annotation.Primary
 import org.springframework.jdbc.datasource.DataSourceTransactionManager
 
-import org.springframework.batch.core.StepExecution
 import org.springframework.batch.core.annotation.BeforeStep
 import org.springframework.batch.core.configuration.annotation.StepScope
+import org.springframework.batch.core.listener.ExecutionContextPromotionListener
 import org.springframework.batch.core.listener.StepExecutionListenerSupport
+import org.springframework.batch.core.scope.context.StepSynchronizationManager
 import org.springframework.beans.factory.annotation.Value
 
 @Configuration
@@ -61,36 +61,55 @@ class BatchConfig : DefaultBatchConfiguration() {
 
     @Bean
     fun step(
-        jobRepository: JobRepository, @Qualifier("accessDataSource") accessDataSource: DataSource,
+        jobRepository: JobRepository,
+        @Qualifier("accessDataSource") accessDataSource: DataSource
     ): Step {
-        return StepBuilder("archiveStep", jobRepository).chunk<Map<String, Any>, Map<String, Any>>(
-            100,
-            transactionManager
-        ).reader(
-            reader(
-                accessDataSource
-            )
-        ).processor(processor()).writer(writer()).build()
+        return StepBuilder("archiveStep", jobRepository)
+            .chunk<Map<String, Any>, Map<String, Any>>(100, getTransactionManager())
+            .reader(reader(accessDataSource))
+            .processor(processor())
+            .writer(writer())
+            .listener(stepExecutionListener())
+            .build()
     }
 
-    private var type: String = ""
+    @Bean
+    fun stepExecutionListener(): StepExecutionListener {
+        return object : StepExecutionListener {
+            override fun beforeStep(stepExecution: StepExecution) {
+                val type = stepExecution.jobParameters.getString("type")
+                stepExecution.executionContext.putString("type", type)
+            }
 
-    @BeforeStep
-    fun beforeStep(stepExecution: StepExecution) {
-        type = stepExecution.jobParameters.getString("type") as String
+            override fun afterStep(stepExecution: StepExecution): ExitStatus? {
+                return stepExecution.exitStatus
+            }
+        }
     }
 
     @Bean
     @StepScope
-    fun reader(@Qualifier("accessDataSource") accessDataSource: DataSource): ItemReader<Map<String, Any>> {
+    fun reader(
+        @Qualifier("accessDataSource") accessDataSource: DataSource,
+    ): ItemReader<Map<String, Any>> {
+        val stepContext = StepSynchronizationManager.getContext()
+        val type = stepContext?.stepExecution?.executionContext?.getString("type")
+        println("Job Parameter param1 in Reader: $type")
 
-
-        return JdbcCursorItemReaderBuilder<Map<String, Any>>().dataSource(accessDataSource).name("glDetailReader")
-            .sql("SELECT * FROM archival_request").rowMapper { rs, _ ->
+        return JdbcCursorItemReaderBuilder<Map<String, Any>>()
+            .dataSource(accessDataSource)
+            .name("glDetailReader")
+            .sql("SELECT * FROM archival_request WHERE type = ?")
+            .preparedStatementSetter { ps -> ps.setString(1, type) }
+            .rowMapper { rs, _ ->
                 mapOf(
-                    "ID" to rs.getLong("ID"), "status" to rs.getString("status")
+                    "ID" to rs.getLong("ID"),
+                    "status" to rs.getString("status"),
+                    "type" to rs.getString("type"),
+                    "cut_off" to rs.getDate("cut_off")
                 )
-            }.build()
+            }
+            .build()
     }
 
     @Bean
