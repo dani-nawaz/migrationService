@@ -21,25 +21,17 @@ import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.jdbc.DataSourceBuilder
 import org.springframework.context.annotation.Primary
 import org.springframework.jdbc.datasource.DataSourceTransactionManager
-import org.springframework.jdbc.datasource.DriverManagerDataSource
-import org.springframework.jdbc.support.JdbcTransactionManager
 
 @Configuration
 @EnableBatchProcessing
-class BatchConfig(
-    accessDataSource: DataSource
-) : DefaultBatchConfiguration() {
+class BatchConfig : DefaultBatchConfiguration() {
 
     @Bean
     @Primary
     override fun getDataSource(): DataSource {
-        // H2 datasource for Spring Batch metadata
-        val dataSource = DataSourceBuilder.create()
-            .driverClassName("org.h2.Driver")
+        val dataSource = DataSourceBuilder.create().driverClassName("org.h2.Driver")
             .url("jdbc:h2:mem:batchdb;DB_CLOSE_DELAY=-1;INIT=RUNSCRIPT FROM 'classpath:org/springframework/batch/core/schema-h2.sql'")
-            .username("sa")
-            .password("")
-            .build()
+            .username("sa").password("").build()
         return dataSource
     }
 
@@ -57,38 +49,27 @@ class BatchConfig(
 
     @Bean
     fun job(jobRepository: JobRepository, step: Step): Job {
-        return JobBuilder("archiveJob", jobRepository)
-            .incrementer(RunIdIncrementer())
-            .start(step)
-            .build()
+        return JobBuilder("archiveJob", jobRepository).incrementer(RunIdIncrementer()).start(step).build()
     }
 
     @Bean
     fun step(
-        jobRepository: JobRepository,
-        @Qualifier("accessDataSource") accessDataSource: DataSource
+        jobRepository: JobRepository, @Qualifier("accessDataSource") accessDataSource: DataSource
     ): Step {
-        return StepBuilder("archiveStep", jobRepository)
-            .chunk<Map<String, Any>, Map<String, Any>>(100, getTransactionManager())
-            .reader(reader(accessDataSource))
-            .processor(processor())
-            .writer(writer())
-            .build()
+        return StepBuilder("archiveStep", jobRepository).chunk<Map<String, Any>, Map<String, Any>>(
+            100,
+            transactionManager
+        ).reader(reader(accessDataSource)).processor(processor()).writer(writer()).build()
     }
 
     @Bean
     fun reader(@Qualifier("accessDataSource") accessDataSource: DataSource): ItemReader<Map<String, Any>> {
-        return JdbcCursorItemReaderBuilder<Map<String, Any>>()
-            .dataSource(accessDataSource)
-            .name("glDetailReader")
-            .sql("SELECT * FROM archival_request")
-            .rowMapper { rs, _ ->
+        return JdbcCursorItemReaderBuilder<Map<String, Any>>().dataSource(accessDataSource).name("glDetailReader")
+            .sql("SELECT * FROM archival_request").rowMapper { rs, _ ->
                 mapOf(
-                    "ID" to rs.getLong("ID"),
-                    "status" to rs.getString("status")
+                    "ID" to rs.getLong("ID"), "status" to rs.getString("status")
                 )
-            }
-            .build()
+            }.build()
     }
 
     @Bean

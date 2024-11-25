@@ -18,7 +18,7 @@ class ArchiveRequestService(
 
     @Scheduled(fixedRate = 5000)
     fun checkForStatusEntry() {
- git        val sql = "SELECT * FROM archival_request WHERE status = 'pending'"
+        val sql = "SELECT * FROM archival_request WHERE status = 'pending'"
         val entries = jdbcTemplate.queryForList(sql)
         if (entries.isNotEmpty()) {
             entries.forEach { entry ->
