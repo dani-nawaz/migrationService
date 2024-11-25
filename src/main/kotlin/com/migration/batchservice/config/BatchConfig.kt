@@ -1,5 +1,6 @@
 package com.migration.batchservice.config
 
+import org.slf4j.LoggerFactory
 import org.springframework.batch.core.Job
 import org.springframework.batch.core.Step
 import org.springframework.batch.core.configuration.annotation.EnableBatchProcessing
@@ -21,6 +22,12 @@ import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.jdbc.DataSourceBuilder
 import org.springframework.context.annotation.Primary
 import org.springframework.jdbc.datasource.DataSourceTransactionManager
+
+import org.springframework.batch.core.StepExecution
+import org.springframework.batch.core.annotation.BeforeStep
+import org.springframework.batch.core.configuration.annotation.StepScope
+import org.springframework.batch.core.listener.StepExecutionListenerSupport
+import org.springframework.beans.factory.annotation.Value
 
 @Configuration
 @EnableBatchProcessing
@@ -54,16 +61,30 @@ class BatchConfig : DefaultBatchConfiguration() {
 
     @Bean
     fun step(
-        jobRepository: JobRepository, @Qualifier("accessDataSource") accessDataSource: DataSource
+        jobRepository: JobRepository, @Qualifier("accessDataSource") accessDataSource: DataSource,
     ): Step {
         return StepBuilder("archiveStep", jobRepository).chunk<Map<String, Any>, Map<String, Any>>(
             100,
             transactionManager
-        ).reader(reader(accessDataSource)).processor(processor()).writer(writer()).build()
+        ).reader(
+            reader(
+                accessDataSource
+            )
+        ).processor(processor()).writer(writer()).build()
+    }
+
+    private var type: String = ""
+
+    @BeforeStep
+    fun beforeStep(stepExecution: StepExecution) {
+        type = stepExecution.jobParameters.getString("type") as String
     }
 
     @Bean
+    @StepScope
     fun reader(@Qualifier("accessDataSource") accessDataSource: DataSource): ItemReader<Map<String, Any>> {
+
+
         return JdbcCursorItemReaderBuilder<Map<String, Any>>().dataSource(accessDataSource).name("glDetailReader")
             .sql("SELECT * FROM archival_request").rowMapper { rs, _ ->
                 mapOf(
@@ -80,7 +101,13 @@ class BatchConfig : DefaultBatchConfiguration() {
     @Bean
     fun writer(): ItemWriter<Map<String, Any>> {
         return ItemWriter { items ->
-            println("Writing items: $items")
+//            println("Writing items: $items")
+            logger.info("Finished writing ${items} items")
         }
     }
+
+    companion object {
+        private val logger = LoggerFactory.getLogger(BatchConfig::class.java)
+    }
 }
+
