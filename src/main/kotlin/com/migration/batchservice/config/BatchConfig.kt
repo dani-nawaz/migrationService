@@ -6,7 +6,6 @@ import org.springframework.batch.core.configuration.annotation.EnableBatchProces
 
 import org.springframework.batch.core.job.builder.JobBuilder
 import org.springframework.batch.core.launch.support.RunIdIncrementer
-import org.springframework.batch.core.repository.JobRepository
 import org.springframework.batch.core.step.builder.StepBuilder
 import org.springframework.batch.item.ItemProcessor
 import org.springframework.batch.item.ItemReader
@@ -17,42 +16,76 @@ import org.springframework.context.annotation.Configuration
 import org.springframework.transaction.PlatformTransactionManager
 import javax.sql.DataSource
 import org.springframework.batch.core.configuration.support.DefaultBatchConfiguration
+import org.springframework.batch.core.repository.JobRepository
+import org.springframework.beans.factory.annotation.Qualifier
+import org.springframework.boot.jdbc.DataSourceBuilder
+import org.springframework.context.annotation.Primary
+import org.springframework.jdbc.datasource.DataSourceTransactionManager
+import org.springframework.jdbc.datasource.DriverManagerDataSource
+import org.springframework.jdbc.support.JdbcTransactionManager
 
 @Configuration
 @EnableBatchProcessing
 class BatchConfig(
-    private val dataSource: DataSource,
-    private val transactionManager: PlatformTransactionManager,
-    private val jobRepository: JobRepository
-){
+    accessDataSource: DataSource
+) : DefaultBatchConfiguration() {
+
+    @Bean
+    @Primary
+    override fun getDataSource(): DataSource {
+        // H2 datasource for Spring Batch metadata
+        val dataSource = DataSourceBuilder.create()
+            .driverClassName("org.h2.Driver")
+            .url("jdbc:h2:mem:batchdb;DB_CLOSE_DELAY=-1;INIT=RUNSCRIPT FROM 'classpath:org/springframework/batch/core/schema-h2.sql'")
+            .username("sa")
+            .password("")
+            .build()
+        return dataSource
+    }
 
 
     @Bean
-    fun job(): Job {
-        return JobBuilder("archiveJob", jobRepository).incrementer(RunIdIncrementer()).start(step()).build()
+    @Primary
+    override fun getTransactionManager(): PlatformTransactionManager {
+        return DataSourceTransactionManager(dataSource)
+    }
+
+    @Bean(name = ["accessTransactionManager"])
+    fun accessTransactionManager(dataSource: DataSource): PlatformTransactionManager {
+        return DataSourceTransactionManager(dataSource)
     }
 
     @Bean
-    fun step(): Step {
+    fun job(jobRepository: JobRepository, step: Step): Job {
+        return JobBuilder("archiveJob", jobRepository)
+            .incrementer(RunIdIncrementer())
+            .start(step)
+            .build()
+    }
+
+    @Bean
+    fun step(
+        jobRepository: JobRepository,
+        @Qualifier("accessDataSource") accessDataSource: DataSource
+    ): Step {
         return StepBuilder("archiveStep", jobRepository)
-            .chunk<Map<String, Any>, Map<String, Any>>(100, transactionManager)
-            .reader(reader())
+            .chunk<Map<String, Any>, Map<String, Any>>(100, getTransactionManager())
+            .reader(reader(accessDataSource))
             .processor(processor())
             .writer(writer())
             .build()
     }
 
-
     @Bean
-    fun reader(): ItemReader<Map<String, Any>> {
+    fun reader(@Qualifier("accessDataSource") accessDataSource: DataSource): ItemReader<Map<String, Any>> {
         return JdbcCursorItemReaderBuilder<Map<String, Any>>()
-            .dataSource(dataSource)
+            .dataSource(accessDataSource)
             .name("glDetailReader")
             .sql("SELECT * FROM archival_request")
             .rowMapper { rs, _ ->
                 mapOf(
                     "ID" to rs.getLong("ID"),
-                    "status" to rs.getString("status"),
+                    "status" to rs.getString("status")
                 )
             }
             .build()
@@ -60,41 +93,13 @@ class BatchConfig(
 
     @Bean
     fun processor(): ItemProcessor<Map<String, Any>, Map<String, Any>> {
-        return ItemProcessor { item ->
-            // Process the item if
-            println("Hi, I'm runningggggg")
-
-            item
-        }
+        return ItemProcessor { item -> item }
     }
 
     @Bean
     fun writer(): ItemWriter<Map<String, Any>> {
         return ItemWriter { items ->
-            // Send data to Azure Cosmos DB
-//            val cosmosClient = CosmosClientBuilder()
-//                .endpoint("your-cosmos-db-endpoint")
-//                .key("your-cosmos-db-key")
-//                .buildClient()
-//            val container = cosmosClient.getDatabase("your-database").getContainer("your-container")
-//            items.forEach { item ->
-//                container.createItem(item, PartitionKey(item["partitionKey"].toString()), null)
-//            }
-
-//            val ids = items.map { it["id"] }
-//            jdbcTemplate.update("DELETE FROM GLDetail WHERE id IN (?)", ids.joinToString(","))
-//
-//            // Check if there are more entries to process
-//            val remainingEntries =
-//                jdbcTemplate.queryForList("SELECT * FROM GLDetail WHERE type = ?", items.first()["type"])
-//            if (remainingEntries.isEmpty()) {
-//                // Delete the entry from archive_history table
-//                jdbcTemplate.update("DELETE FROM archive_history WHERE id = ?", items.first()["id"])
-//            }
-            println("Hi, I'm runningggggg")
+            println("Writing items: $items")
         }
     }
-//
 }
-
-
