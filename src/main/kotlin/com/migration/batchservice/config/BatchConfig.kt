@@ -11,6 +11,7 @@ import org.springframework.batch.item.ItemProcessor
 import org.springframework.batch.item.ItemReader
 import org.springframework.batch.item.ItemWriter
 import org.springframework.batch.item.database.builder.JdbcCursorItemReaderBuilder
+
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.transaction.PlatformTransactionManager
@@ -29,6 +30,7 @@ import org.springframework.batch.core.listener.StepExecutionListenerSupport
 import org.springframework.batch.core.scope.context.StepSynchronizationManager
 import org.springframework.batch.item.database.JdbcCursorItemReader
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.jdbc.core.JdbcTemplate
 
 @Configuration
 @EnableBatchProcessing
@@ -61,7 +63,7 @@ class BatchConfig : DefaultBatchConfiguration() {
         @Qualifier("accessDataSource") accessDataSource: DataSource
     ): Step {
         return StepBuilder("archiveStep", jobRepository)
-            .chunk<Map<String, Any>, Map<String, Any>>(100, getTransactionManager())
+            .chunk<Map<String, Any>, Map<String, Any>>(100, transactionManager)
             .reader(reader(accessDataSource))
             .processor(processor())
             .writer(writer())
@@ -75,7 +77,7 @@ class BatchConfig : DefaultBatchConfiguration() {
         @Qualifier("accessDataSource") accessDataSource: DataSource
     ): Step {
         return StepBuilder("deleteEntriesStep", jobRepository)
-            .chunk<Map<String, Any>, Long>(100, getTransactionManager())
+            .chunk<Map<String, Any>, Long>(100, transactionManager)
             .reader(deleteReader(accessDataSource))
             .processor(deleteProcessor())
             .writer(deleteWriter(accessDataSource))
@@ -86,14 +88,12 @@ class BatchConfig : DefaultBatchConfiguration() {
     @StepScope
     fun deleteReader(@Qualifier("accessDataSource") accessDataSource: DataSource): JdbcCursorItemReader<Map<String, Any>> {
         val stepContext = StepSynchronizationManager.getContext()
-        val type = stepContext?.stepExecution?.executionContext?.getString("type") ?: "defaultType"
-        val id = stepContext?.stepExecution?.executionContext?.getString("ID") ?: "defaultId"
-
+        val cutoffdate = stepContext?.stepExecution?.jobExecution?.jobParameters?.getString("cutOffDate")
         return JdbcCursorItemReaderBuilder<Map<String, Any>>()
             .dataSource(accessDataSource)
             .name("deleteReader")
-            .sql("DELETE FROM archival_request WHERE ID = ? AND type = ?")
-            .preparedStatementSetter { ps -> ps.setString(1, type) }
+            .sql("SELECT ID FROM archival_request WHERE cut_off = ?")
+            .preparedStatementSetter { ps -> ps.setString(1, cutoffdate) }
             .rowMapper { rs, _ -> mapOf("ID" to rs.getLong("ID")) }
             .build()
     }
@@ -105,11 +105,14 @@ class BatchConfig : DefaultBatchConfiguration() {
 
     @Bean
     fun deleteWriter(@Qualifier("accessDataSource") accessDataSource: DataSource): ItemWriter<Long> {
+        val jdbcTemplate = JdbcTemplate(accessDataSource)
         return ItemWriter { items ->
-            logger.info("deleted Item Successfully ${items} items")
+            items.forEach { id ->
+                jdbcTemplate.update("DELETE FROM archival_request WHERE ID = ?", id)
+            }
+            logger.info("Deleted ${items.size()} items successfully")
         }
     }
-
 
     @Bean
     fun stepExecutionListener(): StepExecutionListener {

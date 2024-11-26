@@ -38,7 +38,6 @@ class ArchiveRequestService(
                     val jobParameters = JobParametersBuilder()
                         .addString("type", entry["type"] as String)
                         .addString("cutOffDate", cutOffDate.toString())
-                        .addString("id", entry["ID"] as String)
                         .toJobParameters()
                      jobLauncher.run(job, jobParameters)
 
