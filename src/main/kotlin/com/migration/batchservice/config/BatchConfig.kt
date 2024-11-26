@@ -26,6 +26,8 @@ import org.springframework.batch.core.configuration.annotation.StepScope
 import org.springframework.batch.core.scope.context.StepSynchronizationManager
 import org.springframework.batch.item.database.JdbcCursorItemReader
 import org.springframework.batch.item.database.JdbcPagingItemReader
+import org.springframework.batch.item.database.Order
+import org.springframework.batch.item.database.support.AbstractSqlPagingQueryProvider
 import org.springframework.jdbc.core.JdbcTemplate
 
 
@@ -83,10 +85,11 @@ class BatchConfig : DefaultBatchConfiguration() {
             .rowMapper { rs, _ -> mapOf("ID" to rs.getLong("ID")) }
             .build()
     }
+
     @Bean
     @StepScope
     fun pagingReader(
-        @Qualifier("accessDataSource") accessDataSource: DataSource,
+        @Qualifier("accessDataSource") accessDataSource: DataSource
     ): JdbcPagingItemReader<Map<String, Any>> {
         val stepContext = StepSynchronizationManager.getContext()
         val cutoffdate = stepContext?.stepExecution?.jobExecution?.jobParameters?.getString("cutOffDate")
@@ -95,24 +98,42 @@ class BatchConfig : DefaultBatchConfiguration() {
         reader.pageSize = 100
         reader.setRowMapper { rs, _ ->
             mapOf(
-                "ID" to rs.getLong("ID"),
+                "ID" to rs.getLong("ID")
             )
         }
 
-        val queryProvider = SqlPagingQueryProviderFactoryBean()
-        queryProvider.setDataSource(accessDataSource)
-        queryProvider.setSelectClause("SELECT ID")
-        queryProvider.setFromClause("FROM TBLGLDETAIL")
-        queryProvider.setWhereClause("WHERE JOURNAL = 'GJ'")
-        queryProvider.setSortKey("ID")
+        // Create a custom query provider
+        class CustomPagingQueryProvider : AbstractSqlPagingQueryProvider() {
+            override fun generateFirstPageQuery(pageSize: Int): String {
+                return "SELECT ${selectClause} FROM ${fromClause} WHERE ${whereClause} ORDER BY ${sortKeys.keys.first()} LIMIT $pageSize"
+            }
 
-        reader.setQueryProvider(queryProvider.`object`)
-        reader.setParameterValues(mapOf("cutoffdate" to cutoffdate))
+            override fun generateRemainingPagesQuery(pageSize: Int): String {
+                return "SELECT ${selectClause} FROM ${fromClause} WHERE ${whereClause} AND ${sortKeys.keys.first()} > ? ORDER BY ${sortKeys.keys.first()} LIMIT $pageSize"
+            }
+
+            fun generateJumpToItemQuery(itemIndex: Int, pageSize: Int): String {
+                return "SELECT ${selectClause} FROM ${fromClause} WHERE ${whereClause} ORDER BY ${sortKeys.keys.first()} LIMIT $pageSize OFFSET $itemIndex"
+            }
+
+            fun generateJumpToItemQueryForUpdate(itemIndex: Int, pageSize: Int): String {
+                return generateJumpToItemQuery(itemIndex, pageSize)
+            }
+        }
+
+        val queryProvider = CustomPagingQueryProvider().apply {
+            setSelectClause("ID")
+            setFromClause("tblGjBatch a INNER JOIN tblGjBatchDetail b ON a.BatchNum = b.BatchNum")
+            setWhereClause("b.PostPeriod <= '$cutoffdate'")
+            sortKeys = mapOf("ID" to Order.ASCENDING)
+        }
+
+        reader.setQueryProvider(queryProvider)
+//        reader.setParameterValues(mapOf("cutoffdate" to cutoffdate))
         println("Read first batch")
 
         return reader
     }
-
     @Bean
     fun deleteProcessor(): ItemProcessor<Map<String, Any>, Long> {
         return ItemProcessor { item -> item["ID"] as Long }
@@ -152,3 +173,7 @@ class BatchConfig : DefaultBatchConfiguration() {
 //FROM tblGJBatch
 //INNER JOIN tblGJBatchDetail ON tblGJBatch.BatchNum = tblGJBatchDetail.BatchNum
 //WHERE tblGJBatchDetail.PostPeriod <= ?
+
+//SELECT ID FROM tblGjBatch inner join tblGjBatchDetail on tblGjBatch.BatchNum = tblGjBatchDetail.BatchNum where tblGjBatchDetail.PostPeriod <= ?
+
+//DELETE FROM TblGJBatch WHERE ID = ?
