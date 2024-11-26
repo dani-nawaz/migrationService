@@ -1,5 +1,6 @@
 package com.migration.batchservice.service
 
+import org.springframework.batch.core.ExitStatus
 import org.springframework.batch.core.Job
 import org.springframework.batch.core.JobParametersBuilder
 import org.springframework.batch.core.launch.JobLauncher
@@ -13,7 +14,7 @@ import java.text.DateFormat
 class ArchiveRequestService(
     private val jdbcTemplate: JdbcTemplate,
     private val jobLauncher: JobLauncher,
-    private val job: Job
+    private val job: Job,
 ) {
 
     @Scheduled(fixedRate = 5000)
@@ -37,10 +38,12 @@ class ArchiveRequestService(
                     val jobParameters = JobParametersBuilder()
                         .addString("type", entry["type"] as String)
                         .addString("cutOffDate", cutOffDate.toString())
+                        .addString("id", entry["ID"] as String)
                         .toJobParameters()
-                    jobLauncher.run(job, jobParameters)
+                     jobLauncher.run(job, jobParameters)
+
                 } catch (e: Exception) {
-                    // Revert status back to pending if job launch fails
+
                     jdbcTemplate.update(
                         "UPDATE archival_request SET status = 'pending' WHERE ID = ?",
                         entry["ID"]
