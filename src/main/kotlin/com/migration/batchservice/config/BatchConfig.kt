@@ -3,12 +3,11 @@ package com.migration.batchservice.config
 import org.slf4j.LoggerFactory
 import org.springframework.batch.core.*
 import org.springframework.batch.core.configuration.annotation.EnableBatchProcessing
-
+import org.springframework.batch.item.database.support.SqlPagingQueryProviderFactoryBean
 import org.springframework.batch.core.job.builder.JobBuilder
 import org.springframework.batch.core.launch.support.RunIdIncrementer
 import org.springframework.batch.core.step.builder.StepBuilder
 import org.springframework.batch.item.ItemProcessor
-import org.springframework.batch.item.ItemReader
 import org.springframework.batch.item.ItemWriter
 import org.springframework.batch.item.database.builder.JdbcCursorItemReaderBuilder
 
@@ -23,18 +22,18 @@ import org.springframework.boot.jdbc.DataSourceBuilder
 import org.springframework.context.annotation.Primary
 import org.springframework.jdbc.datasource.DataSourceTransactionManager
 
-import org.springframework.batch.core.annotation.BeforeStep
 import org.springframework.batch.core.configuration.annotation.StepScope
-import org.springframework.batch.core.listener.ExecutionContextPromotionListener
-import org.springframework.batch.core.listener.StepExecutionListenerSupport
 import org.springframework.batch.core.scope.context.StepSynchronizationManager
 import org.springframework.batch.item.database.JdbcCursorItemReader
-import org.springframework.beans.factory.annotation.Value
+import org.springframework.batch.item.database.JdbcPagingItemReader
 import org.springframework.jdbc.core.JdbcTemplate
+
 
 @Configuration
 @EnableBatchProcessing
 class BatchConfig : DefaultBatchConfiguration() {
+
+
 
     @Bean
     @Primary
@@ -53,21 +52,8 @@ class BatchConfig : DefaultBatchConfiguration() {
     }
 
     @Bean
-    fun job(jobRepository: JobRepository, step: Step, deleteStep:Step): Job {
-        return JobBuilder("archiveJob", jobRepository).incrementer(RunIdIncrementer()).start(step).next(deleteStep).build()
-    }
-
-    @Bean
-    fun step(
-        jobRepository: JobRepository,
-        @Qualifier("accessDataSource") accessDataSource: DataSource
-    ): Step {
-        return StepBuilder("archiveStep", jobRepository)
-            .chunk<Map<String, Any>, Map<String, Any>>(100, transactionManager)
-            .reader(reader(accessDataSource))
-            .processor(processor())
-            .writer(writer())
-            .listener(stepExecutionListener())
+    fun job(jobRepository: JobRepository, step: Step, deleteStep: Step): Job {
+        return JobBuilder("archiveJob", jobRepository).incrementer(RunIdIncrementer()).start(step).next(deleteStep)
             .build()
     }
 
@@ -96,6 +82,34 @@ class BatchConfig : DefaultBatchConfiguration() {
             .preparedStatementSetter { ps -> ps.setString(1, cutoffdate) }
             .rowMapper { rs, _ -> mapOf("ID" to rs.getLong("ID")) }
             .build()
+    }
+    @Bean
+    @StepScope
+    fun pagingReader(
+        @Qualifier("accessDataSource") accessDataSource: DataSource,
+    ): JdbcPagingItemReader<Map<String, Any>> {
+        val stepContext = StepSynchronizationManager.getContext()
+        val cutoffdate = stepContext?.stepExecution?.jobExecution?.jobParameters?.getString("cutOffDate")
+        val reader = JdbcPagingItemReader<Map<String, Any>>()
+        reader.setDataSource(accessDataSource)
+        reader.pageSize = 100
+        reader.setRowMapper { rs, _ ->
+            mapOf(
+                "ID" to rs.getLong("ID"),
+            )
+        }
+
+        val queryProvider = SqlPagingQueryProviderFactoryBean()
+        queryProvider.setDataSource(accessDataSource)
+        queryProvider.setSelectClause("SELECT ID")
+        queryProvider.setFromClause("FROM archival_request")
+        queryProvider.setWhereClause("WHERE cut_off = :cutoffdate")
+        queryProvider.setSortKey("ID")
+
+        reader.setQueryProvider(queryProvider.`object`)
+        reader.setParameterValues(mapOf("cutoffdate" to cutoffdate))
+
+        return reader
     }
 
     @Bean
@@ -128,48 +142,12 @@ class BatchConfig : DefaultBatchConfiguration() {
         }
     }
 
-    @Bean
-    @StepScope
-    fun reader(
-        @Qualifier("accessDataSource") accessDataSource: DataSource,
-    ): JdbcCursorItemReader<Map<String, Any>> {
-        val stepContext = StepSynchronizationManager.getContext()
-        val type = stepContext?.stepExecution?.executionContext?.getString("type")
-        println("Job Parameter param1 in Reader: $type")
-
-        return JdbcCursorItemReaderBuilder<Map<String, Any>>()
-            .dataSource(accessDataSource)
-            .name("glDetailReader")
-            .sql("SELECT * FROM archival_request WHERE type = ?")
-            .preparedStatementSetter { ps -> ps.setString(1, type) }
-            .rowMapper { rs, _ ->
-                mapOf(
-                    "ID" to rs.getLong("ID"),
-                    "status" to rs.getString("status"),
-                    "type" to rs.getString("type"),
-                    "cut_off" to rs.getDate("cut_off")
-                )
-            }
-            .build()
-    }
-
-    @Bean
-    fun processor(): ItemProcessor<Map<String, Any>, Map<String, Any>> {
-        return ItemProcessor { item -> item }
-    }
-
-    @Bean
-    fun writer(): ItemWriter<Map<String, Any>> {
-        return ItemWriter { items ->
-//            println("Writing items: $items")
-            logger.info("Finished writing ${items} items")
-        }
-    }
-
-
     companion object {
         private val logger = LoggerFactory.getLogger(BatchConfig::class.java)
     }
-
 }
 
+//DELETE tblGJBatch
+//FROM tblGJBatch
+//INNER JOIN tblGJBatchDetail ON tblGJBatch.BatchNum = tblGJBatchDetail.BatchNum
+//WHERE tblGJBatchDetail.PostPeriod <= ?

@@ -42,7 +42,6 @@ class ArchiveRequestService(
                      jobLauncher.run(job, jobParameters)
 
                 } catch (e: Exception) {
-
                     jdbcTemplate.update(
                         "UPDATE archival_request SET status = 'pending' WHERE ID = ?",
                         entry["ID"]
@@ -53,6 +52,7 @@ class ArchiveRequestService(
         }
     }
 }
+
 // TODO: flow complete,
 // COPY TO AZuRE, local backup,
 // DELETION
