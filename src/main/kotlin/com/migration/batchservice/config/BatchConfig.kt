@@ -64,7 +64,7 @@ class BatchConfig : DefaultBatchConfiguration() {
     ): Step {
         return StepBuilder("deleteEntriesStep", jobRepository)
             .chunk<Map<String, Any>, Long>(100, transactionManager)
-            .reader(deleteReader(accessDataSource))
+            .reader(pagingReader(accessDataSource))
             .processor(deleteProcessor())
             .writer(deleteWriter(accessDataSource))
             .build()
@@ -102,12 +102,13 @@ class BatchConfig : DefaultBatchConfiguration() {
         val queryProvider = SqlPagingQueryProviderFactoryBean()
         queryProvider.setDataSource(accessDataSource)
         queryProvider.setSelectClause("SELECT ID")
-        queryProvider.setFromClause("FROM archival_request")
-        queryProvider.setWhereClause("WHERE cut_off = :cutoffdate")
+        queryProvider.setFromClause("FROM TBLGLDETAIL")
+        queryProvider.setWhereClause("WHERE JOURNAL = 'GJ'")
         queryProvider.setSortKey("ID")
 
         reader.setQueryProvider(queryProvider.`object`)
         reader.setParameterValues(mapOf("cutoffdate" to cutoffdate))
+        println("Read first batch")
 
         return reader
     }
@@ -122,7 +123,7 @@ class BatchConfig : DefaultBatchConfiguration() {
         val jdbcTemplate = JdbcTemplate(accessDataSource)
         return ItemWriter { items ->
             items.forEach { id ->
-                jdbcTemplate.update("DELETE FROM archival_request WHERE ID = ?", id)
+                jdbcTemplate.update("DELETE FROM TBLGLDETAIL WHERE ID = ?", id)
             }
             logger.info("Deleted ${items.size()} items successfully")
         }
