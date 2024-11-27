@@ -35,6 +35,25 @@ import org.springframework.jdbc.core.JdbcTemplate
 @EnableBatchProcessing
 class BatchConfig : DefaultBatchConfiguration() {
 
+    data class TableConfig(
+        val tableName: String,
+        val selectClause: String,
+        val fromClause: String,
+        val whereClause: String,
+        val deleteQuery: String,
+        val sortKey: String = "ID"
+    )
+
+    private val tableConfigs = mapOf(
+        "GLDETAIL" to TableConfig(
+            tableName = "tblGJBatch",
+            selectClause = "ID",
+            fromClause = "tblGJBatch a INNER JOIN tblGJBatchDetail b ON a.BatchNum = b.BatchNum",
+            whereClause = "b.PostPeriod <= ?",
+            deleteQuery = "DELETE FROM tblGjBatch WHERE ID = ?",
+            sortKey = "ID"
+        )
+    )
 
 
     @Bean
@@ -54,45 +73,45 @@ class BatchConfig : DefaultBatchConfiguration() {
     }
 
     @Bean
-    fun job(jobRepository: JobRepository, step: Step, deleteStep: Step): Job {
-        return JobBuilder("archiveJob", jobRepository).incrementer(RunIdIncrementer()).start(step).next(deleteStep)
-            .build()
+    fun job(jobRepository: JobRepository, @Qualifier("accessDataSource") accessDataSource: DataSource): Job {
+
+        val jobBuilder = JobBuilder("archiveJob", jobRepository)
+            .incrementer(RunIdIncrementer())
+            .start(createStepForTable("GLDETAIL", jobRepository, accessDataSource))
+
+//        tableConfigs.forEach { (tableType, _) ->
+//            val steps = createStepForTable(tableType, jobRepository, accessDataSource)
+//            jobBuilder.next(steps)
+//        }
+        return jobBuilder.build()
     }
 
-    @Bean
-    fun deleteStep(
+    fun createStepForTable(
+        tableType: String,
         jobRepository: JobRepository,
-        @Qualifier("accessDataSource") accessDataSource: DataSource
+        accessDataSource: DataSource
     ): Step {
-        return StepBuilder("deleteEntriesStep", jobRepository)
+        val config = tableConfigs[tableType] ?: throw IllegalArgumentException("Unknown table type: $tableType")
+        return StepBuilder("delete${config.tableName}Step", jobRepository)
             .chunk<Map<String, Any>, Long>(100, transactionManager)
-            .reader(pagingReader(accessDataSource))
-            .processor(deleteProcessor())
-            .writer(deleteWriter(accessDataSource))
+            .reader(pagingReader(accessDataSource, config))
+            .processor(ItemProcessor<Map<String, Any>, Long> { item -> item["ID"] as Long })
+            .writer(deleteWriter(accessDataSource, config))
             .build()
     }
 
-    @Bean
     @StepScope
-    fun deleteReader(@Qualifier("accessDataSource") accessDataSource: DataSource): JdbcCursorItemReader<Map<String, Any>> {
+    fun getCutOffDate(): String? {
         val stepContext = StepSynchronizationManager.getContext()
         val cutoffdate = stepContext?.stepExecution?.jobExecution?.jobParameters?.getString("cutOffDate")
-        return JdbcCursorItemReaderBuilder<Map<String, Any>>()
-            .dataSource(accessDataSource)
-            .name("deleteReader")
-            .sql("SELECT ID FROM archival_request WHERE cut_off = ?")
-            .preparedStatementSetter { ps -> ps.setString(1, cutoffdate) }
-            .rowMapper { rs, _ -> mapOf("ID" to rs.getLong("ID")) }
-            .build()
+        return cutoffdate
     }
 
-    @Bean
-    @StepScope
     fun pagingReader(
-        @Qualifier("accessDataSource") accessDataSource: DataSource
+        accessDataSource: DataSource,
+        tableConfig: TableConfig
     ): JdbcPagingItemReader<Map<String, Any>> {
-        val stepContext = StepSynchronizationManager.getContext()
-        val cutoffdate = stepContext?.stepExecution?.jobExecution?.jobParameters?.getString("cutOffDate")
+        val cutoffdate = getCutOffDate()
         val reader = JdbcPagingItemReader<Map<String, Any>>()
         reader.setDataSource(accessDataSource)
         reader.pageSize = 100
@@ -101,8 +120,6 @@ class BatchConfig : DefaultBatchConfiguration() {
                 "ID" to rs.getLong("ID")
             )
         }
-
-        // Create a custom query provider
         class CustomPagingQueryProvider : AbstractSqlPagingQueryProvider() {
             override fun generateFirstPageQuery(pageSize: Int): String {
                 return "SELECT ${selectClause} FROM ${fromClause} WHERE ${whereClause} ORDER BY ${sortKeys.keys.first()} LIMIT $pageSize"
@@ -131,20 +148,18 @@ class BatchConfig : DefaultBatchConfiguration() {
         reader.setQueryProvider(queryProvider)
 //        reader.setParameterValues(mapOf("cutoffdate" to cutoffdate))
         println("Read first batch")
-
+        reader.afterPropertiesSet()
         return reader
     }
-    @Bean
-    fun deleteProcessor(): ItemProcessor<Map<String, Any>, Long> {
-        return ItemProcessor { item -> item["ID"] as Long }
-    }
 
-    @Bean
-    fun deleteWriter(@Qualifier("accessDataSource") accessDataSource: DataSource): ItemWriter<Long> {
+
+
+    fun deleteWriter(accessDataSource: DataSource, tableConfig: TableConfig): ItemWriter<Long> {
+        var delete_query = tableConfig.deleteQuery
         val jdbcTemplate = JdbcTemplate(accessDataSource)
         return ItemWriter { items ->
             items.forEach { id ->
-                jdbcTemplate.update("DELETE FROM TBLGLDETAIL WHERE ID = ?", id)
+                jdbcTemplate.update(delete_query, id)
             }
             logger.info("Deleted ${items.size()} items successfully")
         }
@@ -154,7 +169,7 @@ class BatchConfig : DefaultBatchConfiguration() {
     fun stepExecutionListener(): StepExecutionListener {
         return object : StepExecutionListener {
             override fun beforeStep(stepExecution: StepExecution) {
-                val type = stepExecution.jobParameters.getString("type")
+                val type = stepExecution.jobParameters.getString("cutoffdate")
                 stepExecution.executionContext.putString("type", type)
             }
 
